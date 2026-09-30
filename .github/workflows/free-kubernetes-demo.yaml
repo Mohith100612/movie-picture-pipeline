@@ -71,10 +71,11 @@ jobs:
           kind load docker-image mp-backend:${GITHUB_SHA} mp-frontend:${GITHUB_SHA} --name movie-demo
       - name: Deploy existing Kubernetes manifests
         run: |
-          kubectl apply -k starter/backend/k8s
-          kubectl apply -k starter/frontend/k8s
-          kubectl set image deployment/backend backend=mp-backend:${GITHUB_SHA}
-          kubectl set image deployment/frontend frontend=mp-frontend:${GITHUB_SHA}
+          for APP in backend frontend; do
+            kubectl kustomize "starter/${APP}/k8s" > "/tmp/${APP}.yaml"
+            sed -i "s|image: ${APP}$|image: mp-${APP}:${GITHUB_SHA}|" "/tmp/${APP}.yaml"
+            kubectl apply -f "/tmp/${APP}.yaml"
+          done
           kubectl rollout status deployment/backend --timeout=180s
           kubectl rollout status deployment/frontend --timeout=180s
           mkdir -p demo-evidence
