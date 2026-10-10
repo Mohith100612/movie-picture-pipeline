@@ -1,4 +1,4 @@
-name: Backend CD
+name: Backend Continuous Deployment
 
 "on":
   push:
@@ -117,6 +117,21 @@ jobs:
           kustomize edit set image backend="${ECR_REPOSITORY}:${GITHUB_SHA}"
           kustomize build | kubectl apply -f -
           kubectl rollout status deployment/backend --timeout=180s
+      - name: Verify Kubernetes deployment
+        run: |
+          kubectl rollout status deployment/backend --timeout=180s
+          kubectl get all
+          kubectl describe deployment backend
+          EXPECTED_IMAGE="${ECR_REPOSITORY}:${GITHUB_SHA}"
+          ACTUAL_IMAGE=$(kubectl get deployment backend -o jsonpath='{.spec.template.spec.containers[0].image}')
+          test "${ACTUAL_IMAGE}" = "${EXPECTED_IMAGE}"
+      - name: Verify Backend ECR image
+        env:
+          AWS_PAGER: ""
+        run: |
+          aws ecr describe-images --region "${AWS_REGION}" \
+            --repository-name "${ECR_REPOSITORY#*/}" \
+            --image-ids "imageTag=${GITHUB_SHA}"
       - name: Collect deployment diagnostics
         if: failure()
         run: |
