@@ -11,6 +11,10 @@ name: Backend CD
 permissions:
   contents: read
 
+concurrency:
+  group: backend-staging
+  cancel-in-progress: false
+
 env:
   PYTHON_VERSION: "3.10"
   AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -59,12 +63,18 @@ jobs:
   build:
     name: Build and push image
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs:
       - lint
       - test
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+      - name: Validate deployment configuration
+        run: |
+          : "${AWS_REGION:?Set the AWS_REGION repository secret}"
+          : "${ECR_REPOSITORY:?Set the BACKEND_ECR_REPOSITORY repository secret to the full ECR URL}"
+          : "${EKS_CLUSTER_NAME:?Set the EKS_CLUSTER_NAME repository secret}"
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -83,6 +93,7 @@ jobs:
   deploy:
     name: Deploy to Amazon EKS
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: build
     steps:
       - name: Check out repository
@@ -106,3 +117,13 @@ jobs:
           kustomize edit set image backend="${ECR_REPOSITORY}:${GITHUB_SHA}"
           kustomize build | kubectl apply -f -
           kubectl rollout status deployment/backend --timeout=180s
+      - name: Collect deployment diagnostics
+        if: failure()
+        run: |
+          kubectl get pods -o wide || true
+          kubectl describe deployment/backend || true
+          kubectl logs deployment/backend --tail=100 || true
+      - name: Write deployment summary
+        if: always()
+        run: |
+          printf '### backend staging deployment\nStatus: %s\nCommit: %s\n' "${{ job.status }}" "${GITHUB_SHA}" >> "${GITHUB_STEP_SUMMARY}"

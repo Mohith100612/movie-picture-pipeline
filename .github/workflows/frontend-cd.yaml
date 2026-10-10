@@ -11,6 +11,10 @@ name: Frontend CD
 permissions:
   contents: read
 
+concurrency:
+  group: frontend-staging
+  cancel-in-progress: false
+
 env:
   NODE_VERSION: "18.14"
   AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -62,12 +66,19 @@ jobs:
   build:
     name: Build and push image
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs:
       - lint
       - test
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+      - name: Validate deployment configuration
+        run: |
+          : "${AWS_REGION:?Set the AWS_REGION repository secret}"
+          : "${ECR_REPOSITORY:?Set the FRONTEND_ECR_REPOSITORY repository secret to the full ECR URL}"
+          : "${EKS_CLUSTER_NAME:?Set the EKS_CLUSTER_NAME repository secret}"
+          : "${REACT_APP_MOVIE_API_URL:?Set the REACT_APP_MOVIE_API_URL repository variable}"
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -86,6 +97,7 @@ jobs:
   deploy:
     name: Deploy to Amazon EKS
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: build
     steps:
       - name: Check out repository
@@ -109,3 +121,13 @@ jobs:
           kustomize edit set image frontend="${ECR_REPOSITORY}:${GITHUB_SHA}"
           kustomize build | kubectl apply -f -
           kubectl rollout status deployment/frontend --timeout=180s
+      - name: Collect deployment diagnostics
+        if: failure()
+        run: |
+          kubectl get pods -o wide || true
+          kubectl describe deployment/frontend || true
+          kubectl logs deployment/frontend --tail=100 || true
+      - name: Write deployment summary
+        if: always()
+        run: |
+          printf '### frontend staging deployment\nStatus: %s\nCommit: %s\n' "${{ job.status }}" "${GITHUB_SHA}" >> "${GITHUB_STEP_SUMMARY}"
